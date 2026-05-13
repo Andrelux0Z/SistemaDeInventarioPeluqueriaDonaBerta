@@ -55,9 +55,9 @@ public class AuthController(IConfiguration config) : ControllerBase
             passwordHash = pPasswordHash.Value?.ToString() ?? string.Empty;
             rol = pRol.Value?.ToString() ?? string.Empty;
         }
-        catch
+        catch (Exception ex)
         {
-            return StatusCode(500, new { message = "Error al conectar con la base de datos." });
+            return StatusCode(500, new { message = "Error al conectar con la base de datos.", detail = ex.Message });
         }
 
         if (resultCode == 50001)
@@ -69,7 +69,17 @@ public class AuthController(IConfiguration config) : ControllerBase
         if (resultCode != 0)
             return StatusCode(500, new { message = "Error inesperado al iniciar sesión." });
 
-        if (!BCrypt.Net.BCrypt.Verify(request.Password, passwordHash))
+        bool passwordValida;
+        try
+        {
+            passwordValida = BCrypt.Net.BCrypt.Verify(request.Password, passwordHash);
+        }
+        catch (BCrypt.Net.SaltParseException)
+        {
+            return Unauthorized(new { message = "La contraseña almacenada no tiene formato BCrypt. Recree el usuario desde /api/users." });
+        }
+
+        if (!passwordValida)
             return Unauthorized(new { message = "Contraseña incorrecta." });
 
         var token = GenerarJwt(idUsuario, request.Username, rol);

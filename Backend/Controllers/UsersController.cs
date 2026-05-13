@@ -12,6 +12,8 @@ namespace Backend.Controllers;
 [Authorize(Roles = "Admin")]
 public class UsersController(AppDbContext db) : ControllerBase
 {
+    // TEMPORAL: AllowAnonymous para crear el primer usuario admin. Quitar después.
+    [AllowAnonymous]
     [HttpPost]
     public async Task<IActionResult> CreateUser([FromBody] CreateUsuarioRequestDto request)
     {
