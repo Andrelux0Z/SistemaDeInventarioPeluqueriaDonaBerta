@@ -12,9 +12,15 @@ yarn-error.log*
 # VS Code
 .vscode/
 
-# .NET
+# .NET Core
 bin/
 obj/
+*.user
+*.suo
+*.userosprefs
+*.sln.docstates
+appsettings.Development.json
+appsettings.Local.json
 
 # Visual Studio
 .vs/
