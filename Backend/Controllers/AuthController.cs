@@ -1,38 +1,127 @@
+using System.Data;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using Backend.Data;
 using Backend.DTOs;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Backend.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(AppDbContext db, IConfiguration config) : ControllerBase
+public class AuthController(IConfiguration config) : ControllerBase
 {
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequestDto request)
     {
-        var usuario = await db.Usuarios
-            .FirstOrDefaultAsync(u => u.Username == request.Username && u.Activo);
+        string remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        string connStr = config.GetConnectionString("DefaultConnection")!;
 
-        if (usuario is null || !BCrypt.Net.BCrypt.Verify(request.Password, usuario.PasswordHash))
-            return Unauthorized(new { message = "Credenciales incorrectas." });
+        int resultCode = 0;
+        int idUsuario = 0;
+        string passwordHash = string.Empty;
+        string rol = string.Empty;
 
-        var token = GenerarJwt(usuario.Username, usuario.Rol);
+        try
+        {
+            await using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            await using var cmd = new SqlCommand("dbo.sp_Login", conn)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            cmd.Parameters.AddWithValue("@inUsuario", request.Username);
+            cmd.Parameters.AddWithValue("@inIpPostIn", remoteIp);
+
+            var pResultCode = new SqlParameter("@outResultCode", SqlDbType.Int) { Direction = ParameterDirection.Output };
+            var pIdUsuario = new SqlParameter("@outIdUsuario", SqlDbType.Int) { Direction = ParameterDirection.Output };
+            var pPasswordHash = new SqlParameter("@outPasswordHash", SqlDbType.VarChar, 255) { Direction = ParameterDirection.Output };
+            var pRol = new SqlParameter("@outRol", SqlDbType.VarChar, 20) { Direction = ParameterDirection.Output };
+
+            cmd.Parameters.Add(pResultCode);
+            cmd.Parameters.Add(pIdUsuario);
+            cmd.Parameters.Add(pPasswordHash);
+            cmd.Parameters.Add(pRol);
+
+            await cmd.ExecuteNonQueryAsync();
+
+            resultCode = (int)pResultCode.Value;
+            idUsuario = (int)pIdUsuario.Value;
+            passwordHash = pPasswordHash.Value?.ToString() ?? string.Empty;
+            rol = pRol.Value?.ToString() ?? string.Empty;
+        }
+        catch
+        {
+            return StatusCode(500, new { message = "Error al conectar con la base de datos." });
+        }
+
+        if (resultCode == 50001)
+            return Unauthorized(new { message = "El usuario ingresado no existe." });
+
+        if (resultCode == 50003)
+            return Unauthorized(new { message = "La cuenta está desactivada. Contacte al administrador." });
+
+        if (resultCode != 0)
+            return StatusCode(500, new { message = "Error inesperado al iniciar sesión." });
+
+        if (!BCrypt.Net.BCrypt.Verify(request.Password, passwordHash))
+            return Unauthorized(new { message = "Contraseña incorrecta." });
+
+        var token = GenerarJwt(idUsuario, request.Username, rol);
 
         return Ok(new LoginResponseDto
         {
             Token = token,
-            Username = usuario.Username,
-            Rol = usuario.Rol
+            Username = request.Username,
+            Rol = rol
         });
     }
 
-    private string GenerarJwt(string username, string rol)
+    [Authorize]
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout()
+    {
+        string remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        string connStr = config.GetConnectionString("DefaultConnection")!;
+
+        var idClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!int.TryParse(idClaim, out int idUsuario))
+            return Unauthorized();
+
+        try
+        {
+            await using var conn = new SqlConnection(connStr);
+            await conn.OpenAsync();
+
+            await using var cmd = new SqlCommand("dbo.sp_InsertarBitacoraEvento", conn)
+            {
+                CommandType = CommandType.StoredProcedure
+            };
+
+            cmd.Parameters.AddWithValue("@inIdTipoEvento", 4);
+            cmd.Parameters.AddWithValue("@inDescripcion", "Cierre de sesión");
+            cmd.Parameters.AddWithValue("@inIdPostByUser", idUsuario);
+            cmd.Parameters.AddWithValue("@inIpPostIn", remoteIp);
+
+            var pResultCode = new SqlParameter("@outResultCode", SqlDbType.Int) { Direction = ParameterDirection.Output };
+            cmd.Parameters.Add(pResultCode);
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch
+        {
+            // El logout se completa aunque la bitácora falle
+        }
+
+        return Ok(new { message = "Sesión cerrada correctamente." });
+    }
+
+    private string GenerarJwt(int idUsuario, string username, string rol)
     {
         var jwtSettings = config.GetSection("Jwt");
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings["Key"]!));
@@ -40,6 +129,7 @@ public class AuthController(AppDbContext db, IConfiguration config) : Controller
 
         var claims = new[]
         {
+            new Claim(ClaimTypes.NameIdentifier, idUsuario.ToString()),
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.Role, rol),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
