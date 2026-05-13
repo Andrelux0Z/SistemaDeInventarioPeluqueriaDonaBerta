@@ -1,6 +1,7 @@
 using System.Data;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using Backend.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -69,17 +70,8 @@ public class AuthController(IConfiguration config) : ControllerBase
         if (resultCode != 0)
             return StatusCode(500, new { message = "Error inesperado al iniciar sesión." });
 
-        bool passwordValida;
-        try
-        {
-            passwordValida = BCrypt.Net.BCrypt.Verify(request.Password, passwordHash);
-        }
-        catch (BCrypt.Net.SaltParseException)
-        {
-            return Unauthorized(new { message = "La contraseña almacenada no tiene formato BCrypt. Recree el usuario desde /api/users." });
-        }
-
-        if (!passwordValida)
+        var hashIngresado = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Password)));
+        if (!string.Equals(hashIngresado, passwordHash, StringComparison.OrdinalIgnoreCase))
             return Unauthorized(new { message = "Contraseña incorrecta." });
 
         var token = GenerarJwt(idUsuario, request.Username, rol);

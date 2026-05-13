@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Backend.Data;
 using Backend.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -12,8 +14,6 @@ namespace Backend.Controllers;
 [Authorize(Roles = "Admin")]
 public class UsersController(AppDbContext db) : ControllerBase
 {
-    // TEMPORAL: AllowAnonymous para crear el primer usuario admin. Quitar después.
-    [AllowAnonymous]
     [HttpPost]
     public async Task<IActionResult> CreateUser([FromBody] CreateUsuarioRequestDto request)
     {
@@ -32,7 +32,7 @@ public class UsersController(AppDbContext db) : ControllerBase
         var nuevoUsuario = new Usuario
         {
             Username = request.Username,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+            PasswordHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Password))),
             Rol = request.Rol,
             Activo = true
         };
